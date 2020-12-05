@@ -7,7 +7,6 @@ import socket
 def parse_host_from_req_data(req_data):
     # type: (bytes) -> (str,int)
     s = str(req_data)
-    print(s)
     r = re.findall(r'https?://([^ /]+)', s)
     if r and len(r) > 0:
         url = r[0]
