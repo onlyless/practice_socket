@@ -2,10 +2,12 @@
 import logging
 import socket
 
+import common
+from common import parse_header
 from event_loop import EventLoop, POLL_ERR, POLL_IN, POLL_OUT
-from utils import create_remote_socket, create_server_socket, parse_host_from_req_data
+from utils import create_remote_socket, create_server_socket
 
-BUF_SIZE = 24 * 1024
+BUF_SIZE = 4 * 1024
 STAGE_INIT = 0
 STAGE_ADDR = 1
 STAGE_UDP_ASSOC = 2
@@ -42,20 +44,37 @@ class TCPEvent(object):
 
     def _local_read(self):
         sock = self._local_sock
-        data = sock.recv(BUF_SIZE)
+        try:
+            data = sock.recv(BUF_SIZE)
+        except (OSError, IOError) as e:
+            logging.exception(e)
+            return
         if not data:
             self.destroy()
             return
-        logging.info("recv local read data:%s len: %s", data[-10:], len(data))
+        logging.info("recv local read len: %s", len(data))
+        if data == b'\x05\x01\x00':
+            self.write_to_sock(b'\x05\00', self._local_sock)
+            return
+        if b'\x05\x01\x00' == data[:3]:
+            data = data[3:]
         if self._stage == STAGE_INIT:
-            self._stage = STAGE_STREAM
             self.req_data += data
-            logging.info("POLL_IN event fd:%s req_data:%s ", sock.fileno(), self.req_data)
-            host, port = parse_host_from_req_data(self.req_data)
-            logging.info('[parse_host_from_req_data] host:%s port:%s' % (host, port))
-            remote_sock = create_remote_socket(host, port)
+            logging.info("POLL_IN event fd:%s", sock.fileno())
+            header_result = parse_header(self.req_data)
+            if not header_result:
+                logging.error("[parse_header] error res:%s data:%s", header_result, self.req_data)
+                return
+            self._stage = STAGE_STREAM
+            addrtype, remote_addr, remote_port, header_length = header_result
+            logging.info('connecting %s:%d from %s:%d header_len:%s' %
+                         (common.to_str(remote_addr), remote_port,
+                          self._client_address[0], self._client_address[1], header_length))
+            self.req_data = self.req_data[header_length:]
+            remote_sock = create_remote_socket(remote_addr, remote_port)
             self._remote_sock = remote_sock
-            logging.info("connecting %s:%s from :%s", host, port, self._client_address)
+            self.write_to_sock(b'\x05\x00\x00\x01\x00\x00\x00\x00\x10\x10', self._local_sock)
+            logging.info("connecting %s:%s from :%s", remote_addr, remote_port, self._client_address)
             logging.info("remote_sock:%s local_sock:%s", self._remote_sock.fileno(), self._local_sock.fileno())
             self.loop.add(remote_sock, POLL_OUT | POLL_ERR, self)
         elif self._stage == STAGE_STREAM:
@@ -65,8 +84,10 @@ class TCPEvent(object):
 
     def _remote_read(self):
         sock = self._remote_sock
+        logging.info("remote_sock: remote:%s local:%s", self._remote_sock.getpeername(),
+                     self._remote_sock.getsockname())
         data = sock.recv(BUF_SIZE)
-        logging.info("POLL_IN event fd:%s recv_data:%s len:%s", sock.fileno(), data[-10:], len(data))
+        logging.info("POLL_IN event fd:%s  len:%s", sock.fileno(), len(data))
         if not data:
             self.destroy()
             return
@@ -113,7 +134,7 @@ class TCPEvent(object):
             data = data[s:]
             uncomplete = True
             self.loop.modify(sock, POLL_OUT | POLL_ERR)
-        logging.info("write_to_sock event fd:%s send_data:%s l:%s s:%s", sock.fileno(), data, l, s)
+        logging.info("write_to_sock event fd:%s l:%s s:%s", sock.fileno(), l, s)
 
         if uncomplete:
             if sock == self._local_sock:
@@ -122,16 +143,16 @@ class TCPEvent(object):
                 self.req_data += data
         else:
             if sock == self._local_sock:
-                logging.info("send to local complete:%s %s", data[-10:], len(data))
+                logging.info("send to local complete: %s", len(data))
             elif sock == self._remote_sock:
-                logging.info("send to remote complete:%s %s", data[-10:], len(data))
+                logging.info("send to remote complete: %s", len(data))
         return uncomplete
 
 
 class TCPServerEvent(object):
-    def __init__(self):
-        self.server_sock = create_server_socket('0.0.0.0', '1082')
-        logging.info("src fd:%s", self.server_sock.fileno())
+    def __init__(self, port):
+        self.server_sock = create_server_socket('0.0.0.0', port)
+        logging.info("src fd:%s listing server port:%s", self.server_sock.fileno(), port)
         self.loop = None  # type: EventLoop
 
     def handle_event(self, sock, fd, mode):
@@ -150,8 +171,9 @@ class TCPServerEvent(object):
 
 
 if __name__ == '__main__':
+    server_port = 1082
     logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s,%(msecs)d %(levelname)-8s [%(filename)s:%(lineno)d] %(message)s')
     loop = EventLoop()
-    TCPServerEvent().add_loop(loop)
+    TCPServerEvent(server_port).add_loop(loop)
     loop.run()
