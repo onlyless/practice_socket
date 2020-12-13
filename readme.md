@@ -1,10 +1,10 @@
-# A simple Socks5 Proxy by io multiplexing
+# A simple Socks5 Proxy has no encryption  
 
-- implementation by python
+- implementation by python and io multiplexing
+- implementation by golang
 
 todo:
    - support udp
-   - implementation by golang
 
 learn from [shadowsocks](https://github.com/shadowsocks/shadowsocks)
 
@@ -12,7 +12,8 @@ how to use:
 
    server:
    ```
-   sudo python tcp_event.py
+   python tcp_event.py
+   go build -o socks_proxy main.go && ./socks_proxy 
    ```
 
    client:
@@ -20,4 +21,5 @@ how to use:
    macOS:
         brew install polipo
         polipo  socksParentProxy=$server_host:$server_port
+        export http_proxy=http://127.0.0.1:8123 https_proxy=http://127.0.0.1:8123
    ```
