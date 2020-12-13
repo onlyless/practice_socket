@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -19,11 +20,13 @@ var (
 	errCmd           = errors.New("socks command not supported")
 	debug            = true
 	readTimeout      = time.Second * 5
+	pool             = &sync.Pool{}
 )
 
 const (
 	socksVer5       = 5
 	socksCmdConnect = 1
+	BUF_SIZE        = 4096
 )
 
 func SetReadTimeout(c net.Conn) {
@@ -148,8 +151,11 @@ func HandShake(conn net.Conn) (err error) {
 
 func PipeThenClose(src, dst net.Conn) {
 	defer dst.Close()
-	buf := leakyBuf.Get()
-	defer leakyBuf.Put(buf)
+	buf, ok := pool.Get().([]byte)
+	if !ok || len(buf) == 0 {
+		buf = make([]byte, BUF_SIZE)
+	}
+	defer pool.Put(buf)
 	for {
 		SetReadTimeout(src)
 		n, err := src.Read(buf)
